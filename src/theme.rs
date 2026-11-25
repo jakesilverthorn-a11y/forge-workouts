@@ -146,14 +146,15 @@ pub fn chip(ui: &mut Ui, selected: bool, text: &str) -> egui::Response {
     )
 }
 
+/// A small rounded label. Drawn as one fixed-size widget so it wraps to the next
+/// line as a whole and keeps its height inside taller rows.
 pub fn pill(ui: &mut Ui, text: &str, color: Color32) {
-    egui::Frame::default()
-        .fill(color.gamma_multiply(0.16))
-        .corner_radius(CornerRadius::same(12))
-        .inner_margin(Margin::symmetric(10, 4))
-        .show(ui, |ui| {
-            ui.label(RichText::new(text).size(12.5).color(color));
-        });
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(12.5), color);
+    let size = galley.size() + vec2(20.0, 8.0);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(12), color.gamma_multiply(0.16));
+    p.galley(rect.center() - galley.size() / 2.0, galley, color);
 }
 
 pub fn page_header(ui: &mut Ui, title: &str, sub: &str) {
@@ -198,8 +199,10 @@ pub fn thumb(ui: &mut Ui, def: &ExerciseDef, size: f32) {
 }
 
 /// Round check button used to tick off sets.
-pub fn done_toggle(ui: &mut Ui, done: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 26.0), Sense::click());
+pub fn done_toggle(ui: &mut Ui, done: bool, large: bool) -> egui::Response {
+    // On phones the tap target is bigger than the drawn circle.
+    let size = if large { vec2(44.0, 40.0) } else { vec2(28.0, 26.0) };
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let c = rect.center();
     let p = ui.painter();
     if done {
@@ -266,7 +269,9 @@ pub fn stat_card(ui: &mut Ui, w: f32, title: &str, value: &str, sub: &str, color
         ui.vertical(|ui| {
             ui.set_width(w - 34.0);
             kicker(ui, title, MUTED);
-            ui.label(RichText::new(value).size(26.0).strong().color(color));
+            // Smaller figures in the narrow two-by-two phone grid so values stay on one line.
+            let size = if w < 220.0 { 21.0 } else { 26.0 };
+            ui.label(RichText::new(value).size(size).strong().color(color));
             ui.label(RichText::new(sub).size(12.0).color(MUTED));
         });
     });

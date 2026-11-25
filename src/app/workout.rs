@@ -15,7 +15,6 @@ enum CardAction {
 impl ForgeApp {
     pub(super) fn page_workout(&mut self, ui: &mut Ui) {
         let now = now_secs();
-        let units = self.data.settings.units;
         let rec = recovery(&self.data.history, now);
         let live = self.active.is_some();
 
@@ -40,7 +39,39 @@ impl ForgeApp {
         let mut focus = self.focus;
         let mut duration = self.data.settings.duration_min;
 
+        let compact = self.compact;
+
         // Header
+        if compact {
+            ui.label(
+                RichText::new(kicker_text.as_str())
+                    .size(11.5)
+                    .strong()
+                    .color(if live { ACCENT } else { MUTED }),
+            );
+            ui.label(RichText::new(self.plan.title.as_str()).size(26.0).strong().color(TEXT));
+            ui.add_space(6.0);
+            let full = ui.available_width();
+            if live {
+                ui.horizontal(|ui| {
+                    let bw = (full - 8.0) / 2.0;
+                    if ui.add(ghost_button("Discard").min_size(vec2(bw, 44.0))).clicked() {
+                        discard = true;
+                    }
+                    if ui.add(accent_button("Finish workout").min_size(vec2(bw, 44.0))).clicked() {
+                        finish = true;
+                    }
+                });
+            } else {
+                let can_start = !self.plan.exercises.is_empty();
+                if ui
+                    .add_enabled(can_start, accent_button("Start workout").min_size(vec2(full, 46.0)))
+                    .clicked()
+                {
+                    start_clicked = true;
+                }
+            }
+        } else {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label(
@@ -69,6 +100,7 @@ impl ForgeApp {
                 }
             });
         });
+        }
 
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
@@ -83,7 +115,7 @@ impl ForgeApp {
 
         if !live {
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Focus").color(MUTED));
                 egui::ComboBox::from_id_salt("focus_combo")
                     .selected_text(focus.name())
@@ -114,9 +146,9 @@ impl ForgeApp {
             });
         }
 
-        // Rest timer
+        // Rest timer (on phones it floats above the tab bar instead; see `phone_rest_bar`).
         let mut skip_rest = false;
-        if let Some(until) = self.active.as_ref().and_then(|a| a.rest_until) {
+        if let Some(until) = self.active.as_ref().and_then(|a| a.rest_until).filter(|_| !compact) {
             let left = until - now_f();
             if left > 0.0 {
                 ui.add_space(10.0);
@@ -126,6 +158,7 @@ impl ForgeApp {
                     .corner_radius(CornerRadius::same(12))
                     .inner_margin(Margin::symmetric(16, 10))
                     .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
                             ui.label(RichText::new("Rest").size(15.0).strong().color(ACCENT_TEXT));
                             ui.label(
@@ -134,7 +167,9 @@ impl ForgeApp {
                                     .size(22.0)
                                     .color(TEXT),
                             );
-                            ui.label(RichText::new("before your next set").color(MUTED));
+                            if !compact {
+                                ui.label(RichText::new("before your next set").color(MUTED));
+                            }
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if ui.add(small_button("Skip rest")).clicked() {
                                     skip_rest = true;
@@ -147,47 +182,34 @@ impl ForgeApp {
 
         ui.add_space(14.0);
         let avail = ui.available_width();
-        let right_w = (avail * 0.32).clamp(260.0, 340.0);
-        let left_w = (avail - right_w - 20.0).max(300.0);
+        let (left_w, right_w) = if compact {
+            (avail, avail)
+        } else {
+            let right_w = (avail * 0.32).clamp(260.0, 340.0);
+            ((avail - right_w - 20.0).max(300.0), right_w)
+        };
         let mut acts: Vec<CardAction> = Vec::new();
 
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(vec2(left_w, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(left_w);
-                if self.plan.exercises.is_empty() {
-                    card_frame().show(ui, |ui| {
-                        ui.vertical(|ui| {
-                            ui.set_width(left_w - 34.0);
-                            section_title(ui, "No exercises yet");
-                            ui.label(
-                                RichText::new("Add exercises yourself or ask for a new suggestion.")
-                                    .color(MUTED),
-                            );
-                        });
-                    });
-                    ui.add_space(10.0);
-                }
-                let n = self.plan.exercises.len();
-                for i in 0..n {
-                    let expanded = self.expanded.contains(&i);
-                    let last = last_session_text(&self.data.history, &self.plan.exercises[i].id, units);
-                    let ex = &mut self.plan.exercises[i];
-                    acts.extend(exercise_card(ui, i, ex, units, live, expanded, last));
-                    ui.add_space(10.0);
-                }
-                if ui
-                    .add(ghost_button("+  Add exercise").min_size(vec2(left_w, 42.0)))
-                    .clicked()
-                {
-                    acts.push(CardAction::OpenAdd);
-                }
-            });
-            ui.add_space(20.0);
-            ui.allocate_ui_with_layout(vec2(right_w, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(right_w);
+        if compact {
+            ui.vertical(|ui| {
+                ui.set_width(avail);
+                self.exercise_list(ui, &mut acts, left_w, live, compact);
+                ui.add_space(16.0);
                 self.workout_sidebar(ui, &rec, right_w);
             });
-        });
+        } else {
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(vec2(left_w, 0.0), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(left_w);
+                    self.exercise_list(ui, &mut acts, left_w, live, compact);
+                });
+                ui.add_space(20.0);
+                ui.allocate_ui_with_layout(vec2(right_w, 0.0), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(right_w);
+                    self.workout_sidebar(ui, &rec, right_w);
+                });
+            });
+        }
 
         // Apply what happened this frame.
         for a in acts {
@@ -254,6 +276,36 @@ impl ForgeApp {
         }
         if finish {
             self.finish_workout();
+        }
+    }
+
+    fn exercise_list(&mut self, ui: &mut Ui, acts: &mut Vec<CardAction>, w: f32, live: bool, compact: bool) {
+        let units = self.data.settings.units;
+        if self.plan.exercises.is_empty() {
+            card_frame().show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(w - 34.0);
+                    section_title(ui, "No exercises yet");
+                    ui.label(
+                        RichText::new("Add exercises yourself or ask for a new suggestion.").color(MUTED),
+                    );
+                });
+            });
+            ui.add_space(10.0);
+        }
+        let n = self.plan.exercises.len();
+        for i in 0..n {
+            let expanded = self.expanded.contains(&i);
+            let last = last_session_text(&self.data.history, &self.plan.exercises[i].id, units);
+            let ex = &mut self.plan.exercises[i];
+            acts.extend(exercise_card(ui, i, ex, units, live, expanded, last, compact));
+            ui.add_space(10.0);
+        }
+        if ui
+            .add(ghost_button("+  Add exercise").min_size(vec2(w, 44.0)))
+            .clicked()
+        {
+            acts.push(CardAction::OpenAdd);
         }
     }
 
@@ -401,6 +453,7 @@ fn exercise_card(
     live: bool,
     expanded: bool,
     last: Option<String>,
+    compact: bool,
 ) -> Vec<CardAction> {
     let mut acts: Vec<CardAction> = Vec::new();
     let Some(def) = data::find(&ex.id) else { return acts };
@@ -414,6 +467,41 @@ fn exercise_card(
         .show(ui, |ui| {
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width());
+                if compact {
+                    ui.horizontal(|ui| {
+                        thumb(ui, def, 46.0);
+                        ui.add_space(2.0);
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(def.name).size(16.0).strong().color(TEXT));
+                                if all_done {
+                                    ui.label(RichText::new("Done").strong().color(GOOD));
+                                }
+                            });
+                            ui.label(
+                                RichText::new(format!("{} · {}", def.primary.name(), def.equipment.name()))
+                                    .size(12.5)
+                                    .color(MUTED),
+                            );
+                            ui.label(RichText::new(summary.as_str()).size(13.5).color(ACCENT_TEXT));
+                        });
+                    });
+                    ui.horizontal(|ui| {
+                        if !live
+                            && ui
+                                .add(small_button(if expanded { "Hide sets" } else { "Edit sets" }).min_size(vec2(0.0, 34.0)))
+                                .clicked()
+                        {
+                            acts.push(CardAction::Toggle(i));
+                        }
+                        if ui.add(small_button("Swap").min_size(vec2(0.0, 34.0))).clicked() {
+                            acts.push(CardAction::Swap(i));
+                        }
+                        if ui.add(small_button("Remove").min_size(vec2(0.0, 34.0))).clicked() {
+                            acts.push(CardAction::Remove(i));
+                        }
+                    });
+                } else {
                 ui.horizontal(|ui| {
                     thumb(ui, def, 54.0);
                     ui.add_space(4.0);
@@ -449,18 +537,20 @@ fn exercise_card(
                         }
                     });
                 });
+                }
                 if let Some(l) = &last {
                     ui.label(RichText::new(l.as_str()).size(12.0).color(MUTED));
                 }
                 if live || expanded {
                     ui.add_space(4.0);
-                    sets_grid(ui, i, &mut *ex, def, units, live, &mut acts);
+                    sets_grid(ui, i, &mut *ex, def, units, live, &mut acts, compact);
                     let many = ex.sets.len() > 1;
+                    let bh = if compact { 34.0 } else { 28.0 };
                     ui.horizontal(|ui| {
-                        if ui.add(small_button("+ Add set")).clicked() {
+                        if ui.add(small_button("+ Add set").min_size(vec2(0.0, bh))).clicked() {
                             acts.push(CardAction::AddSet(i));
                         }
-                        if many && ui.add(small_button("- Remove set")).clicked() {
+                        if many && ui.add(small_button("- Remove set").min_size(vec2(0.0, bh))).clicked() {
                             acts.push(CardAction::RemoveSet(i));
                         }
                     });
@@ -478,6 +568,7 @@ fn sets_grid(
     units: Units,
     live: bool,
     acts: &mut Vec<CardAction>,
+    compact: bool,
 ) {
     let weight_header = match def.kind {
         Kind::Weighted => format!("WEIGHT ({})", units.label().to_uppercase()),
@@ -486,8 +577,12 @@ fn sets_grid(
     let reps_header = if def.kind == Kind::Timed { "SECONDS" } else { "REPS" };
     egui::Grid::new(("sets_grid", i))
         .num_columns(4)
-        .spacing(vec2(22.0, 6.0))
+        .spacing(if compact { vec2(14.0, 10.0) } else { vec2(22.0, 6.0) })
         .show(ui, |ui| {
+            if compact {
+                // Bigger number boxes for fingers.
+                ui.spacing_mut().interact_size.y = 36.0;
+            }
             ui.label(RichText::new("SET").size(11.0).strong().color(MUTED));
             ui.label(RichText::new(weight_header).size(11.0).strong().color(MUTED));
             ui.label(RichText::new(reps_header).size(11.0).strong().color(MUTED));
@@ -517,7 +612,7 @@ fn sets_grid(
                 let suffix = if def.kind == Kind::Timed { " s" } else { " reps" };
                 ui.add(egui::DragValue::new(&mut s.reps).speed(0.2).range(0..=600).suffix(suffix));
                 if live {
-                    if done_toggle(ui, s.done).clicked() {
+                    if done_toggle(ui, s.done, compact).clicked() {
                         s.done = !s.done;
                         if s.done {
                             acts.push(CardAction::SetChecked);

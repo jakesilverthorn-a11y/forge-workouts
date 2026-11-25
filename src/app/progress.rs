@@ -41,29 +41,33 @@ impl ForgeApp {
         };
 
         let avail = ui.available_width();
-        let gap = 12.0;
-        let cw = (avail - gap * 3.0) / 4.0;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            stat_card(
-                ui,
-                cw,
-                "Last 30 days",
-                &format!("{} workouts", w30),
-                &format!("{} min of training", total_minutes),
-                TEXT,
-            );
-            stat_card(ui, cw, "This week", &format!("{}", wk_count), "workouts so far", ACCENT_TEXT);
-            stat_card(ui, cw, "Volume, 30 days", &units.fmt_big(vol30), "weight x reps, all sets", TEXT);
-            stat_card(
-                ui,
-                cw,
-                "Streak",
-                &format!("{} week{}", streak, if streak == 1 { "" } else { "s" }),
-                "in a row with a workout",
-                GOOD,
-            );
-        });
+        let compact = self.compact;
+        let gap = if compact { 10.0 } else { 12.0 };
+        // Four across on desktop, two by two on phones.
+        let per_row = if compact { 2 } else { 4 };
+        let cw = (avail - gap * (per_row - 1) as f32) / per_row as f32;
+        let streak_txt = format!("{} week{}", streak, if streak == 1 { "" } else { "s" });
+        let w30_txt = format!("{} workouts", w30);
+        let min_txt = format!("{} min of training", total_minutes);
+        let wk_txt = format!("{}", wk_count);
+        let vol_txt = units.fmt_big(vol30);
+        let stats: [(&str, &str, &str, Color32); 4] = [
+            ("Last 30 days", &w30_txt, &min_txt, TEXT),
+            ("This week", &wk_txt, "workouts so far", ACCENT_TEXT),
+            ("Volume, 30 days", &vol_txt, "weight x reps, all sets", TEXT),
+            ("Streak", &streak_txt, "in a row with a workout", GOOD),
+        ];
+        for row in stats.chunks(per_row) {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                for (title, value, sub, color) in row {
+                    stat_card(ui, cw, title, value, sub, *color);
+                }
+            });
+            if compact {
+                ui.add_space(gap - 7.0);
+            }
+        }
         ui.add_space(14.0);
 
         // Weekly volume
@@ -79,7 +83,7 @@ impl ForgeApp {
                 .sum();
             bars.push((fmt_short_date(day_to_ts(wsd)), units.from_lb(v)));
         }
-        let half = (avail - 16.0) / 2.0;
+        let half = if compact { avail } else { (avail - 16.0) / 2.0 };
 
         // Weighted exercises with history, most-logged first.
         let mut counts: HashMap<&'static str, usize> = HashMap::new();
@@ -107,8 +111,10 @@ impl ForgeApp {
             None => Vec::new(),
         };
 
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = 16.0;
+        let chart_h = if compact { 180.0 } else { 210.0 };
+        let layout = if compact { Layout::top_down(Align::Min) } else { Layout::left_to_right(Align::Min) };
+        ui.with_layout(layout, |ui| {
+            ui.spacing_mut().item_spacing = vec2(16.0, 14.0);
             card_frame().show(ui, |ui| {
                 ui.vertical(|ui| {
                     ui.set_width(half - 34.0);
@@ -118,7 +124,7 @@ impl ForgeApp {
                             .size(12.0)
                             .color(MUTED),
                     );
-                    charts::bar_chart(ui, vec2(half - 34.0, 210.0), &bars, ACCENT, &|v: f32| {
+                    charts::bar_chart(ui, vec2(half - 34.0, chart_h), &bars, ACCENT, &|v: f32| {
                         if v >= 10_000.0 {
                             format!("{:.0}k", v / 1000.0)
                         } else if v >= 1000.0 {
@@ -132,36 +138,38 @@ impl ForgeApp {
             card_frame().show(ui, |ui| {
                 ui.vertical(|ui| {
                     ui.set_width(half - 34.0);
-                    ui.horizontal(|ui| {
-                        section_title(ui, "Strength trend");
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let label = match picked.and_then(|id| data::find(id)) {
-                                Some(d) => d.name,
-                                None => "No exercises yet",
-                            };
-                            egui::ComboBox::from_id_salt("trend_combo")
-                                .selected_text(label)
-                                .width(210.0)
-                                .show_ui(ui, |ui| {
-                                    for (id, n) in options.iter() {
-                                        if let Some(d) = data::find(id) {
-                                            ui.selectable_value(
-                                                &mut picked,
-                                                Some(*id),
-                                                format!("{}  ({}x)", d.name, n),
-                                            );
-                                        }
+                    let label = match picked.and_then(|id| data::find(id)) {
+                        Some(d) => d.name,
+                        None => "No exercises yet",
+                    };
+                    let mut combo = |ui: &mut Ui, w: f32| {
+                        egui::ComboBox::from_id_salt("trend_combo")
+                            .selected_text(label)
+                            .width(w)
+                            .show_ui(ui, |ui| {
+                                for (id, n) in options.iter() {
+                                    if let Some(d) = data::find(id) {
+                                        ui.selectable_value(&mut picked, Some(*id), format!("{}  ({}x)", d.name, n));
                                     }
-                                });
+                                }
+                            });
+                    };
+                    if compact {
+                        section_title(ui, "Strength trend");
+                        combo(ui, half - 34.0);
+                    } else {
+                        ui.horizontal(|ui| {
+                            section_title(ui, "Strength trend");
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| combo(ui, 210.0));
                         });
-                    });
+                    }
                     ui.label(
                         RichText::new(format!("Estimated 1-rep max ({})", units.label()))
                             .size(12.0)
                             .color(MUTED),
                     );
                     let ul = units.label();
-                    charts::line_chart(ui, vec2(half - 34.0, 210.0), &trend, BLUE, &|v: f32| {
+                    charts::line_chart(ui, vec2(half - 34.0, chart_h), &trend, BLUE, &|v: f32| {
                         format!("{:.0} {}", v, ul)
                     });
                 });
@@ -187,6 +195,37 @@ impl ForgeApp {
                 section_title(ui, "Personal records");
                 if prs.is_empty() {
                     ui.label(RichText::new("Log some weighted sets to see records here.").color(MUTED));
+                }
+                if compact {
+                    // A stacked list instead of a four-column table.
+                    for (k, (d, t, s, e1)) in prs.iter().enumerate() {
+                        if k > 0 {
+                            ui.separator();
+                        }
+                        ui.horizontal(|ui| {
+                            thumb(ui, d, 34.0);
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(d.name).strong().color(TEXT));
+                                });
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(
+                                        RichText::new(format!("{} x {}", units.fmt(s.weight), s.reps))
+                                            .size(13.0)
+                                            .color(TEXT),
+                                    );
+                                    ui.label(
+                                        RichText::new(format!("1RM {}", units.fmt(*e1)))
+                                            .size(13.0)
+                                            .strong()
+                                            .color(ACCENT_TEXT),
+                                    );
+                                    ui.label(RichText::new(fmt_short_date(*t)).size(13.0).color(MUTED));
+                                });
+                            });
+                        });
+                    }
+                    return;
                 }
                 egui::Grid::new("pr_grid")
                     .num_columns(4)
@@ -224,6 +263,10 @@ impl ForgeApp {
         let before = format!("{:?}", self.data.settings);
         let w = ui.available_width().min(900.0);
         let inner = w - 34.0;
+        let compact = self.compact;
+        // Three tiles across on desktop; one per row on phones.
+        let tw = if compact { inner } else { (inner - 2.0 * 10.0) / 3.0 };
+        let tile_layout = if compact { Layout::top_down(Align::Min) } else { Layout::left_to_right(Align::Min) };
 
         {
             let s = &mut self.data.settings;
@@ -231,9 +274,8 @@ impl ForgeApp {
                 ui.vertical(|ui| {
                     ui.set_width(inner);
                     section_title(ui, "Training goal");
-                    let tw = (inner - 2.0 * 10.0) / 3.0;
-                    ui.horizontal_top(|ui| {
-                        ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.with_layout(tile_layout, |ui| {
+                        ui.spacing_mut().item_spacing = vec2(10.0, 8.0);
                         for g in Goal::ALL {
                             if option_tile(ui, s.goal == g, g.name(), g.blurb(), tw) {
                                 s.goal = g;
@@ -242,8 +284,8 @@ impl ForgeApp {
                     });
                     ui.add_space(12.0);
                     section_title(ui, "Workout split");
-                    ui.horizontal_top(|ui| {
-                        ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.with_layout(tile_layout, |ui| {
+                        ui.spacing_mut().item_spacing = vec2(10.0, 8.0);
                         for sp in Split::ALL {
                             if option_tile(ui, s.split == sp, sp.name(), sp.blurb(), tw) {
                                 s.split = sp;
@@ -257,7 +299,7 @@ impl ForgeApp {
                 ui.vertical(|ui| {
                     ui.set_width(inner);
                     section_title(ui, "Experience");
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         for e in Experience::ALL {
                             if chip(ui, s.experience == e, e.name()).clicked() {
                                 s.experience = e;
@@ -271,7 +313,7 @@ impl ForgeApp {
                     );
                     ui.add_space(10.0);
                     section_title(ui, "Workout length");
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         for m in [20u32, 30, 45, 60, 75, 90] {
                             if chip(ui, s.duration_min == m, &format!("{} min", m)).clicked() {
                                 s.duration_min = m;
@@ -280,7 +322,7 @@ impl ForgeApp {
                     });
                     ui.add_space(10.0);
                     section_title(ui, "Units");
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if chip(ui, s.units == Units::Lb, "Pounds (lb)").clicked() {
                             s.units = Units::Lb;
                         }
@@ -336,11 +378,11 @@ impl ForgeApp {
                 ui.set_width(inner);
                 section_title(ui, "Your data");
                 ui.label(
-                    RichText::new("Workouts are saved on this computer automatically.")
+                    RichText::new("Workouts are saved on this device automatically.")
                         .size(12.0)
                         .color(MUTED),
                 );
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if ui.add(ghost_button("Replace with sample history")).clicked() {
                         load_sample = true;
                     }

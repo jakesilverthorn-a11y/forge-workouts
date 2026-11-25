@@ -23,6 +23,11 @@ use crate::util::*;
 
 const STORAGE_KEY: &str = "forge_data_v1";
 
+/// Screens narrower than this (in points) get the phone layout.
+const COMPACT_WIDTH: f32 = 720.0;
+const PHONE_TOP_H: f32 = 52.0;
+const PHONE_TABS_H: f32 = 60.0;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Workout,
@@ -47,6 +52,17 @@ impl Tab {
             Tab::Workout => "Workout",
             Tab::Recovery => "Recovery",
             Tab::Exercises => "Exercises",
+            Tab::Log => "Log",
+            Tab::Progress => "Progress",
+            Tab::Settings => "Settings",
+        }
+    }
+    /// Label for the phone tab bar.
+    fn short(self) -> &'static str {
+        match self {
+            Tab::Workout => "Workout",
+            Tab::Recovery => "Recovery",
+            Tab::Exercises => "Library",
             Tab::Log => "Log",
             Tab::Progress => "Progress",
             Tab::Settings => "Settings",
@@ -84,6 +100,10 @@ pub struct ForgeApp {
     lib_filter: Option<Muscle>,
     lib_only_mine: bool,
     lib_selected: &'static str,
+    /// Phone layout: showing one exercise's details instead of the list.
+    lib_detail_open: bool,
+    /// True on narrow screens (phones): one column and a bottom tab bar.
+    compact: bool,
     log_selected: Option<i64>,
     progress_ex: Option<&'static str>,
     confirm_clear: bool,
@@ -125,6 +145,8 @@ impl ForgeApp {
             lib_filter: None,
             lib_only_mine: true,
             lib_selected: "bench_press",
+            lib_detail_open: false,
+            compact: false,
             log_selected: None,
             progress_ex: None,
             confirm_clear: false,
@@ -318,6 +340,120 @@ impl ForgeApp {
         }
     }
 
+    // ------------------------------------------------------------ phone layout
+
+    fn phone_top_bar(&mut self, ui: &mut Ui) {
+        ui.horizontal_centered(|ui| {
+            logo(ui, 30.0);
+            ui.add_space(2.0);
+            ui.label(RichText::new("Forge").size(19.0).strong().color(TEXT));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if let Some(a) = &self.active {
+                    let elapsed = now_secs() - a.start;
+                    ui.label(RichText::new(fmt_clock(elapsed)).monospace().size(15.0).color(TEXT));
+                    let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+                    ui.painter().circle_filled(r.center(), 4.5, GOOD);
+                } else {
+                    let now = now_secs();
+                    let this_week = week_start_day(now);
+                    let n = self
+                        .data
+                        .history
+                        .iter()
+                        .filter(|w| week_start_day(w.start) == this_week)
+                        .count();
+                    pill(ui, &format!("{} this week", n), ACCENT_TEXT);
+                }
+            });
+        });
+    }
+
+    fn phone_tab_bar(&mut self, ui: &mut Ui) {
+        let rect = ui.max_rect();
+        ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0, BORDER));
+        let w = rect.width() / Tab::ALL.len() as f32;
+        for (k, t) in Tab::ALL.into_iter().enumerate() {
+            let r = Rect::from_min_size(pos2(rect.left() + w * k as f32, rect.top()), vec2(w, rect.height()));
+            let resp = ui.interact(r, egui::Id::new(("tab", k)), Sense::click());
+            let selected = self.tab == t;
+            let col = if selected { ACCENT } else { MUTED };
+            let p = ui.painter();
+            if selected {
+                let bar = Rect::from_center_size(pos2(r.center().x, r.top() + 1.5), vec2(28.0, 3.0));
+                p.rect_filled(bar, CornerRadius::same(2), ACCENT);
+            }
+            tab_icon(p, t, pos2(r.center().x, r.top() + 22.0), col);
+            p.text(
+                pos2(r.center().x, r.top() + 44.0),
+                Align2::CENTER_CENTER,
+                t.short(),
+                FontId::proportional(11.0),
+                if selected { TEXT } else { MUTED },
+            );
+            if t == Tab::Workout && self.active.is_some() {
+                p.circle_filled(pos2(r.center().x + 14.0, r.top() + 12.0), 4.0, GOOD);
+            }
+            if resp.clicked() {
+                self.tab = t;
+                self.lib_detail_open = false;
+            }
+        }
+    }
+
+    /// Phones: the rest countdown floats just above the tab bar, so it stays in view
+    /// while you scroll through your sets.
+    fn phone_rest_bar(&mut self, ctx: &egui::Context) {
+        let Some(until) = self.active.as_ref().and_then(|a| a.rest_until) else { return };
+        let left = until - now_f();
+        if left <= 0.0 {
+            return;
+        }
+        let w = ctx.screen_rect().width() - 24.0;
+        let mut skip = false;
+        egui::Area::new(egui::Id::new("phone_rest"))
+            .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -(PHONE_TABS_H + 10.0)))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::default()
+                    .fill(ACCENT_SOFT)
+                    .stroke(Stroke::new(1.0, ACCENT))
+                    .corner_radius(CornerRadius::same(14))
+                    .inner_margin(Margin::symmetric(14, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(w - 28.0);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Rest").size(15.0).strong().color(ACCENT_TEXT));
+                            ui.label(
+                                RichText::new(fmt_clock(left.ceil() as i64))
+                                    .monospace()
+                                    .size(22.0)
+                                    .color(TEXT),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.add(small_button("Skip rest").min_size(vec2(0.0, 34.0))).clicked() {
+                                    skip = true;
+                                }
+                            });
+                        });
+                    });
+            });
+        if skip {
+            if let Some(a) = self.active.as_mut() {
+                a.rest_until = None;
+            }
+        }
+    }
+
+    /// Width for a pop-up window: its desktop size, or the screen minus a margin on phones.
+    fn window_width(&self, ctx: &egui::Context, desktop: f32) -> f32 {
+        desktop.min(ctx.screen_rect().width() - 24.0)
+    }
+
+    fn window_height(&self, ctx: &egui::Context, desktop: f32) -> f32 {
+        let reserved = if self.compact { PHONE_TOP_H + PHONE_TABS_H + 40.0 } else { 60.0 };
+        desktop.min(ctx.screen_rect().height() - reserved).max(200.0)
+    }
+
     // ------------------------------------------------------------ pop-up windows
 
     fn windows(&mut self, ctx: &egui::Context) {
@@ -329,11 +465,12 @@ impl ForgeApp {
             match cur {
                 Some(cur) => {
                     let alts = alternatives(cur, &self.data.settings, &self.plan);
+                    let (ww, wh) = (self.window_width(ctx, 440.0), self.window_height(ctx, 420.0));
                     egui::Window::new("Swap exercise")
                         .collapsible(false)
                         .resizable(false)
                         .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-                        .fixed_size(vec2(440.0, 420.0))
+                        .fixed_size(vec2(ww, wh))
                         .show(ctx, |ui| {
                             ui.label(
                                 RichText::new(format!(
@@ -344,7 +481,7 @@ impl ForgeApp {
                                 .color(MUTED),
                             );
                             ui.add_space(6.0);
-                            ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                            ScrollArea::vertical().max_height(wh - 80.0).show(ui, |ui| {
                                 if alts.is_empty() {
                                     ui.label(RichText::new("No alternatives fit your equipment.").color(MUTED));
                                 }
@@ -388,12 +525,13 @@ impl ForgeApp {
             let mut close = false;
             let mut add: Option<&'static ExerciseDef> = None;
             let settings = self.data.settings.clone();
+            let (ww, wh) = (self.window_width(ctx, 460.0), self.window_height(ctx, 480.0));
             let search: &mut String = &mut self.add_search;
             egui::Window::new("Add exercise")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-                .fixed_size(vec2(460.0, 480.0))
+                .fixed_size(vec2(ww, wh))
                 .show(ctx, |ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut *search)
@@ -402,7 +540,7 @@ impl ForgeApp {
                     );
                     ui.add_space(6.0);
                     let q = search.trim().to_lowercase();
-                    ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
+                    ScrollArea::vertical().max_height(wh - 100.0).show(ui, |ui| {
                         for d in EXERCISES.iter() {
                             let matches = settings.has(d.equipment)
                                 && (q.is_empty()
@@ -455,8 +593,16 @@ impl ForgeApp {
             return;
         }
         ctx.request_repaint_after(Duration::from_millis(200));
+        // Centre over the page: right of the sidebar on desktop, above the tab bar on phones.
+        let resting = self.active.as_ref().and_then(|a| a.rest_until).is_some_and(|u| u > now_f());
+        let offset = if self.compact {
+            // Sit above the floating rest bar when it is showing.
+            vec2(0.0, -(PHONE_TABS_H + if resting { 70.0 } else { 14.0 }))
+        } else {
+            vec2(110.0, -28.0)
+        };
         egui::Area::new(egui::Id::new("toast"))
-            .anchor(Align2::CENTER_BOTTOM, vec2(110.0, -28.0))
+            .anchor(Align2::CENTER_BOTTOM, offset)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::default()
@@ -478,19 +624,35 @@ impl eframe::App for ForgeApp {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
 
-        egui::SidePanel::left("nav")
-            .exact_width(224.0)
-            .resizable(false)
-            .frame(egui::Frame::default().fill(PANEL).inner_margin(Margin::same(16)))
-            .show(ctx, |ui| self.nav(ui));
+        self.compact = ctx.screen_rect().width() < COMPACT_WIDTH;
+
+        let page_margin = if self.compact {
+            egui::TopBottomPanel::top("phone_top")
+                .exact_height(PHONE_TOP_H)
+                .frame(egui::Frame::default().fill(PANEL).inner_margin(Margin::symmetric(14, 0)))
+                .show(ctx, |ui| self.phone_top_bar(ui));
+            egui::TopBottomPanel::bottom("phone_tabs")
+                .exact_height(PHONE_TABS_H)
+                .frame(egui::Frame::default().fill(PANEL).inner_margin(Margin::ZERO))
+                .show(ctx, |ui| self.phone_tab_bar(ui));
+            Margin::symmetric(14, 14)
+        } else {
+            egui::SidePanel::left("nav")
+                .exact_width(224.0)
+                .resizable(false)
+                .frame(egui::Frame::default().fill(PANEL).inner_margin(Margin::same(16)))
+                .show(ctx, |ui| self.nav(ui));
+            Margin::symmetric(28, 22)
+        };
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(BG).inner_margin(Margin::symmetric(28, 22)))
+            .frame(egui::Frame::default().fill(BG).inner_margin(page_margin))
             .show(ctx, |ui| {
                 let tab = self.tab;
+                let edge = if self.compact { 0.0 } else { 6.0 };
                 ui.push_id(tab.name(), |ui| {
                     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        ui.set_width(ui.available_width() - 6.0);
+                        ui.set_width(ui.available_width() - edge);
                         match tab {
                             Tab::Workout => self.page_workout(ui),
                             Tab::Recovery => self.page_recovery(ui),
@@ -504,6 +666,9 @@ impl eframe::App for ForgeApp {
                 });
             });
 
+        if self.compact {
+            self.phone_rest_bar(ctx);
+        }
         self.windows(ctx);
         self.draw_toast(ctx);
     }
@@ -532,6 +697,63 @@ fn logo(ui: &mut Ui, size: f32) {
         let small = Rect::from_center_size(c + vec2(sx * size * 0.31, 0.0), vec2(size * 0.08, size * 0.26));
         p.rect_filled(big, CornerRadius::same(2), white);
         p.rect_filled(small, CornerRadius::same(2), white);
+    }
+}
+
+/// Small line icons for the phone tab bar.
+fn tab_icon(p: &egui::Painter, tab: Tab, c: egui::Pos2, col: Color32) {
+    let s = Stroke::new(1.8, col);
+    match tab {
+        Tab::Workout => {
+            p.line_segment([c + vec2(-7.0, 0.0), c + vec2(7.0, 0.0)], s);
+            for sx in [-1.0f32, 1.0] {
+                p.rect_filled(Rect::from_center_size(c + vec2(sx * 6.5, 0.0), vec2(3.5, 13.0)), CornerRadius::same(1), col);
+                p.rect_filled(Rect::from_center_size(c + vec2(sx * 10.0, 0.0), vec2(2.5, 8.0)), CornerRadius::same(1), col);
+            }
+        }
+        Tab::Recovery => {
+            p.circle_stroke(c, 9.0, s);
+            let pts = [
+                c + vec2(-6.0, 1.0),
+                c + vec2(-2.5, 1.0),
+                c + vec2(-1.0, -4.0),
+                c + vec2(1.5, 4.0),
+                c + vec2(3.0, 1.0),
+                c + vec2(6.0, 1.0),
+            ];
+            for w in pts.windows(2) {
+                p.line_segment([w[0], w[1]], s);
+            }
+        }
+        Tab::Exercises => {
+            for dy in [-6.0f32, 0.0, 6.0] {
+                p.circle_filled(c + vec2(-8.0, dy), 1.6, col);
+                p.line_segment([c + vec2(-4.0, dy), c + vec2(9.0, dy)], s);
+            }
+        }
+        Tab::Log => {
+            let r = Rect::from_center_size(c + vec2(0.0, 1.0), vec2(18.0, 16.0));
+            p.rect_stroke(r, CornerRadius::same(3), s, egui::StrokeKind::Middle);
+            p.line_segment([r.left_top() + vec2(0.0, 5.0), r.right_top() + vec2(0.0, 5.0)], s);
+            for dx in [-4.5f32, 4.5] {
+                p.line_segment([c + vec2(dx, -10.0), c + vec2(dx, -5.0)], s);
+            }
+        }
+        Tab::Progress => {
+            for (dx, h) in [(-6.0f32, 7.0f32), (0.0, 12.0), (6.0, 17.0)] {
+                let r = Rect::from_min_max(pos2(c.x + dx - 2.0, c.y + 9.0 - h), pos2(c.x + dx + 2.0, c.y + 9.0));
+                p.rect_filled(r, CornerRadius::same(1), col);
+            }
+        }
+        Tab::Settings => {
+            for dy in [-6.0f32, 0.0, 6.0] {
+                p.line_segment([c + vec2(-9.0, dy), c + vec2(9.0, dy)], s);
+            }
+            for (dx, dy) in [(4.0f32, -6.0f32), (-4.0, 0.0), (2.0, 6.0)] {
+                p.circle_filled(c + vec2(dx, dy), 3.0, PANEL);
+                p.circle_stroke(c + vec2(dx, dy), 3.0, s);
+            }
+        }
     }
 }
 
@@ -571,6 +793,36 @@ fn nav_item(ui: &mut Ui, label: &str, hint: &str, selected: bool, live: bool) ->
         p.circle_filled(c, 5.0, GOOD);
     }
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+}
+
+/// Two columns side by side on desktop; stacked (left first) on phones.
+fn two_columns(
+    ui: &mut Ui,
+    compact: bool,
+    left_w: f32,
+    right_w: f32,
+    left: impl FnOnce(&mut Ui),
+    right: impl FnOnce(&mut Ui),
+) {
+    if compact {
+        ui.vertical(|ui| {
+            left(ui);
+            ui.add_space(14.0);
+            right(ui);
+        });
+    } else {
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(vec2(left_w, 0.0), Layout::top_down(Align::Min), |ui| {
+                ui.set_width(left_w);
+                left(ui);
+            });
+            ui.add_space(20.0);
+            ui.allocate_ui_with_layout(vec2(right_w, 0.0), Layout::top_down(Align::Min), |ui| {
+                ui.set_width(right_w);
+                right(ui);
+            });
+        });
+    }
 }
 
 fn legend_dot(ui: &mut Ui, color: Color32, text: &str) {

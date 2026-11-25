@@ -14,18 +14,26 @@ impl ForgeApp {
             "How rested each muscle group is, based on the sets you've logged. Fresh muscles get picked first.",
         );
         let avail = ui.available_width();
-        let right_w = (avail * 0.4).clamp(300.0, 420.0);
-        let left_w = (avail - right_w - 20.0).max(320.0);
+        let compact = self.compact;
+        let (left_w, right_w) = if compact {
+            (avail, avail)
+        } else {
+            let right_w = (avail * 0.4).clamp(300.0, 420.0);
+            ((avail - right_w - 20.0).max(320.0), right_w)
+        };
         let history = &self.data.history;
 
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(vec2(left_w, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(left_w);
+        two_columns(
+            ui,
+            compact,
+            left_w,
+            right_w,
+            |ui| {
                 card_frame().show(ui, |ui| {
                     ui.vertical(|ui| {
                         let inner = left_w - 34.0;
                         ui.set_width(inner);
-                        let fw = ((inner - 30.0) / 2.0).min(220.0);
+                        let fw = ((inner - 30.0) / 2.0).min(220.0).max(60.0);
                         let color_of = |m: Muscle| -> Color32 { rec_color(rec[m.index()]) };
                         ui.horizontal(|ui| {
                             let pad = ((inner - fw * 2.0 - 30.0) / 2.0).max(0.0);
@@ -40,7 +48,9 @@ impl ForgeApp {
                                         rec[m.index()]
                                     ));
                                 }
-                                ui.add_space(22.0);
+                                if !back {
+                                    ui.add_space(22.0);
+                                }
                             }
                         });
                         ui.add_space(8.0);
@@ -103,10 +113,8 @@ impl ForgeApp {
                         }
                     });
                 });
-            });
-            ui.add_space(20.0);
-            ui.allocate_ui_with_layout(vec2(right_w, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(right_w);
+            },
+            |ui| {
                 card_frame().show(ui, |ui| {
                     ui.vertical(|ui| {
                         let inner = right_w - 34.0;
@@ -127,14 +135,34 @@ impl ForgeApp {
                         }
                     });
                 });
-            });
-        });
+            },
+        );
     }
 
     // ------------------------------------------------------------ exercise library
 
     pub(super) fn page_exercises(&mut self, ui: &mut Ui) {
         let settings = self.data.settings.clone();
+        let compact = self.compact;
+
+        // Phone: one exercise's details fill the screen, with a way back to the list.
+        if compact && self.lib_detail_open {
+            if let Some(d) = data::find(self.lib_selected) {
+                if ui.add(ghost_button("‹  All exercises").min_size(vec2(0.0, 40.0))).clicked() {
+                    self.lib_detail_open = false;
+                }
+                ui.add_space(10.0);
+                let in_plan = self.plan.exercises.iter().any(|e| e.id == d.id);
+                if self.exercise_detail(ui, d, ui.available_width(), in_plan) {
+                    let e = prescribe(d, &self.data.settings, &self.data.history);
+                    self.plan.exercises.push(e);
+                    self.show_toast(format!("Added {} to today's workout.", d.name));
+                }
+                return;
+            }
+            self.lib_detail_open = false;
+        }
+
         let available = EXERCISES.iter().filter(|d| settings.has(d.equipment)).count();
         page_header(
             ui,
@@ -145,11 +173,12 @@ impl ForgeApp {
                 available
             ),
         );
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
+            let sw = if compact { ui.available_width() } else { 260.0 };
             ui.add(
                 egui::TextEdit::singleline(&mut self.lib_search)
                     .hint_text("Search exercises")
-                    .desired_width(260.0),
+                    .desired_width(sw),
             );
             ui.add_space(8.0);
             ui.checkbox(&mut self.lib_only_mine, "Only my equipment");
@@ -183,20 +212,22 @@ impl ForgeApp {
             .collect();
 
         let avail = ui.available_width();
-        let left_w = (avail * 0.42).clamp(300.0, 420.0);
-        let right_w = (avail - left_w - 20.0).max(320.0);
+        let (left_w, right_w) = if compact {
+            (avail, avail)
+        } else {
+            let left_w = (avail * 0.42).clamp(300.0, 420.0);
+            (left_w, (avail - left_w - 20.0).max(320.0))
+        };
         let mut add_to_plan: Option<&'static ExerciseDef> = None;
         let mut select: Option<&'static str> = None;
         let current = self.lib_selected;
 
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(vec2(left_w, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(left_w);
+        let mut list_ui = |ui: &mut Ui| {
                 if list.is_empty() {
                     ui.label(RichText::new("No exercises match.").color(MUTED));
                 }
                 for d in list.iter().copied() {
-                    let selected = current == d.id;
+                    let selected = !compact && current == d.id;
                     let resp = egui::Frame::default()
                         .fill(if selected { CARD2 } else { CARD })
                         .stroke(Stroke::new(1.0, if selected { ACCENT } else { BORDER }))
@@ -228,12 +259,17 @@ impl ForgeApp {
                     {
                         select = Some(d.id);
                     }
-                    ui.add_space(2.0);
+                    ui.add_space(if compact { 6.0 } else { 2.0 });
                 }
+        };
+
+        if compact {
+            ui.vertical(|ui| {
+                ui.set_width(left_w);
+                list_ui(ui);
             });
-            ui.add_space(20.0);
-            ui.allocate_ui_with_layout(vec2(right_w, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(right_w);
+        } else {
+            two_columns(ui, false, left_w, right_w, list_ui, |ui| {
                 if let Some(d) = data::find(current) {
                     let in_plan = self.plan.exercises.iter().any(|e| e.id == d.id);
                     if self.exercise_detail(ui, d, right_w, in_plan) {
@@ -241,10 +277,13 @@ impl ForgeApp {
                     }
                 }
             });
-        });
+        }
 
         if let Some(id) = select {
             self.lib_selected = id;
+            if compact {
+                self.lib_detail_open = true;
+            }
         }
         if let Some(d) = add_to_plan {
             let e = prescribe(d, &self.data.settings, &self.data.history);
@@ -262,12 +301,19 @@ impl ForgeApp {
             ui.vertical(|ui| {
                 let inner = w - 34.0;
                 ui.set_width(inner);
+                let compact = self.compact;
                 ui.horizontal(|ui| {
-                    thumb(ui, d, 64.0);
+                    thumb(ui, d, if compact { 48.0 } else { 64.0 });
                     ui.add_space(6.0);
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(d.name).size(24.0).strong().color(TEXT));
-                        ui.horizontal(|ui| {
+                        ui.set_max_width(inner - 70.0);
+                        ui.label(
+                            RichText::new(d.name)
+                                .size(if compact { 20.0 } else { 24.0 })
+                                .strong()
+                                .color(TEXT),
+                        );
+                        ui.horizontal_wrapped(|ui| {
                             pill(ui, d.primary.name(), d.primary.group().color());
                             pill(ui, d.equipment.name(), MUTED);
                             pill(ui, if d.compound { "Compound" } else { "Isolation" }, MUTED);
@@ -289,7 +335,7 @@ impl ForgeApp {
                 let sessions_n = sessions(&self.data.history, d.id).len();
                 let best = best_set(&self.data.history, d);
                 ui.horizontal_top(|ui| {
-                    let fw = 92.0;
+                    let fw = if compact { 76.0 } else { 92.0 };
                     let color_of = |m: Muscle| -> Color32 {
                         if m == d.primary {
                             ACCENT
@@ -382,12 +428,14 @@ impl ForgeApp {
     pub(super) fn page_log(&mut self, ui: &mut Ui) {
         let now = now_secs();
         let units = self.data.settings.units;
+        let compact = self.compact;
         page_header(
             ui,
             "Workout Log",
             &format!(
-                "{} workouts logged. Click one to see every set.",
-                self.data.history.len()
+                "{} workouts logged. {} one to see every set.",
+                self.data.history.len(),
+                if compact { "Tap" } else { "Click" }
             ),
         );
         let w = ui.available_width();
@@ -415,8 +463,28 @@ impl ForgeApp {
                 .show(ui, |ui| {
                     ui.vertical(|ui| {
                         ui.set_width(w - 34.0);
-                        let header = ui
-                            .horizontal(|ui| {
+                        let header = if compact {
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    kicker(ui, &fmt_day_label(wl.start), MUTED);
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        ui.label(
+                                            RichText::new(if sel { "Hide" } else { "Details" })
+                                                .size(12.5)
+                                                .color(ACCENT_TEXT),
+                                        );
+                                    });
+                                });
+                                ui.label(RichText::new(wl.title.as_str()).size(18.0).strong().color(TEXT));
+                                ui.horizontal_wrapped(|ui| {
+                                    pill(ui, &fmt_minutes(wl.duration_secs), TEXT);
+                                    pill(ui, &format!("{} sets", wl.set_count()), TEXT);
+                                    pill(ui, &units.fmt_big(wl.volume()), ACCENT_TEXT);
+                                });
+                            })
+                            .response
+                        } else {
+                            ui.horizontal(|ui| {
                                 ui.vertical(|ui| {
                                     kicker(
                                         ui,
@@ -440,7 +508,8 @@ impl ForgeApp {
                                     pill(ui, &fmt_minutes(wl.duration_secs), TEXT);
                                 });
                             })
-                            .response;
+                            .response
+                        };
                         let hit = ui.interact(
                             header.rect,
                             egui::Id::new(("log_header", wl.start)),
@@ -469,8 +538,11 @@ impl ForgeApp {
                                                 Kind::Bodyweight => format!("{} reps", s.reps),
                                             })
                                             .collect();
-                                        ui.label(
-                                            RichText::new(sets.join("   ·   ")).size(13.0).color(MUTED),
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(sets.join("   ·   ")).size(13.0).color(MUTED),
+                                            )
+                                            .wrap(),
                                         );
                                     });
                                 });

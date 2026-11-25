@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>Forge - Smart Workout Planner</title>
+    <meta name="theme-color" content="#111318" />
+
+    <!-- Trunk compiles the Rust app to WebAssembly and links it here. -->
+    <link data-trunk rel="rust" data-wasm-opt="2" />
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #111318;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+        }
+        #loading_text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #c8ccd4;
+            font: 16px system-ui, sans-serif;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="the_canvas_id"></canvas>
+    <div id="loading_text"><p>Loading Forge…</p></div>
+</body>
+</html>

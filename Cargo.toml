@@ -1,0 +1,28 @@
+[package]
+name = "forge-workouts"
+version = "0.1.0"
+edition = "2021"
+description = "Forge - a smart desktop workout planner that adapts to muscle recovery"
+
+[dependencies]
+eframe = { version = "=0.31.1", features = ["persistence"] }
+serde = { version = "1", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# Desktop only: saving the `--screenshot` PNG.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Web (browser) build.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "wasmbind"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+winit = "0.30"
+
+[profile.release]
+opt-level = 2
